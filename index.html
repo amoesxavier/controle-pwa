@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <link rel="manifest" href="manifest.json">
+   <meta name="theme-color" content="#3498db">
+  <meta charset="UTF-8">
+  <title>Controle de Horas</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#3498db">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Controle de Horas">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+
+  <!-- Bibliotecas -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-firestore-compat.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; padding: 20px; margin: auto; background-color: #f9f9f9; color: #333; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.05); max-width: 900px; width: 100%; }
+    h1, h2, h3 { text-align: center; color: #2c3e50; }
+    label { display: block; margin-top: 10px; font-weight: bold; }
+    input, select, button { padding: 10px; margin-top: 5px; width: 100%; box-sizing: border-box; font-size: 16px; border-radius: 4px; border: 1px solid #ccc; }
+    button { background-color: #3498db; color: white; border: none; cursor: pointer; margin-top: 10px; }
+    button:hover { background-color: #2980b9; }
+    #resetar { background-color: #e74c3c !important; }
+    #resetar:hover { background-color: #c0392b !important; }
+    #exportar { background-color: #2ecc71 !important; }
+    #exportar:hover { background-color: #27ae60 !important; }
+    .saldo { margin-top: 15px; font-size: 18px; font-weight: bold; text-align: center; }
+    #resultados { margin-top: 20px; background-color: #ecf0f1; padding: 10px; border-radius: 4px; }
+    #graficoHoras { margin-top: 20px; width: 100% !important; height: auto; }
+    #loginSection { text-align: center; margin-bottom: 20px; }
+    footer { margin-top: 30px; text-align: center; font-size: 14px; color: #888; }
+  </style>
+</head>
+<body>
+  <h1>Controle de Horas</h1>
+  <h2>Servidor Público</h2>
+  <h3>Câmara Municipal do Cabo</h3>
+
+  <div id="loginSection">
+    <div id="userInfo" style="display: none;">
+      <p>Bem-vindo, <span id="userEmail"></span> | <a href="#" onclick="logout()">Sair</a></p>
+    </div>
+    <button onclick="loginGoogle()">Entrar com Google</button>
+  </div>
+
+  <div id="appContent" style="display: none;">
+    <label for="diasSemana">Dias por semana:</label>
+    <select id="diasSemana" onchange="atualizarMeta()">
+      <option value="5">5 dias (6h/dia)</option>
+      <option value="4">4 dias (7h30/dia)</option>
+      <option value="3">3 dias (10h/dia)</option>
+    </select>
+
+    <input type="hidden" id="metaHoras" value="6">
+
+    <label for="data">Data:</label>
+    <input type="date" id="data" required>
+
+    <label for="entrada">Entrada:</label>
+    <input type="time" id="entrada" required>
+
+    <label for="saida">Saída:</label>
+    <input type="time" id="saida" required>
+
+    <button onclick="registrarHoras()">Registrar</button>
+    <button id="resetar" onclick="resetarTudo()">Resetar</button>
+    <button id="exportar" onclick="exportarPDF()">Exportar PDF</button>
+
+    <div class="saldo" id="saldoTotal">Saldo Total: 0h</div>
+    <div class="saldo" id="tipoSaldo"></div>
+
+    <div id="resultados"></div>
+    <canvas id="graficoHoras"></canvas>
+  </div>
+
+  <footer>Criado por Amóes Xavier</footer>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyBul-SUoFUqXqZj4b6fzRqTyU8Lv4NAhbM",
+      authDomain: "controle-horas-servidor.firebaseapp.com",
+      projectId: "controle-horas-servidor",
+      storageBucket: "controle-horas-servidor.appspot.com",
+      messagingSenderId: "752390979152",
+      appId: "1:752390979152:web:1703111ba5e947bf751b55"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+
+    function loginGoogle() {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      auth.signInWithPopup(provider)
+        .then(result => {})
+        .catch(error => alert("Erro ao fazer login: " + error.message));
+    }
+
+    function logout() {
+      auth.signOut();
+    }
+
+    auth.onAuthStateChanged(user => {
+      const login = document.getElementById("loginSection");
+      const content = document.getElementById("appContent");
+      const info = document.getElementById("userInfo");
+
+      if (user) {
+        document.getElementById("userEmail").textContent = user.email;
+        login.style.display = "none";
+        content.style.display = "block";
+        info.style.display = "block";
+        carregarRegistros(user.uid);
+      } else {
+        login.style.display = "block";
+        content.style.display = "none";
+        info.style.display = "none";
+      }
+    });
+
+    function atualizarMeta() {
+      const select = document.getElementById("diasSemana").value;
+      let horas = 6;
+      if (select === "4") horas = 7.5;
+      else if (select === "3") horas = 10;
+      document.getElementById("metaHoras").value = horas;
+    }
+
+    let totalSaldo = 0;
+    let grafico = null;
+
+    function registrarHoras() {
+      const user = auth.currentUser;
+      if (!user) return alert("Você precisa estar logado para salvar os dados!");
+
+      const data = document.getElementById("data").value;
+      const entrada = document.getElementById("entrada").value;
+      const saida = document.getElementById("saida").value;
+      if (!data || !entrada || !saida) return alert("Preencha todos os campos!");
+
+      const inicio = new Date(1970-01-01T${entrada}:00);
+      const fim = new Date(1970-01-01T${saida}:00);
+      const diffMs = fim - inicio;
+      const horasTrabalhadas = diffMs / 1000 / 60 / 60;
+
+      const meta = parseFloat(document.getElementById("metaHoras").value);
+      const saldo = horasTrabalhadas - meta;
+
+      const dataFormatada = formatarData(data);
+      const horasFormatadas = formatarHorasDecimais(horasTrabalhadas);
+      const saldoFormatado = formatarHorasDecimais(Math.abs(saldo));
+      const linha = ${dataFormatada}: Trabalhou ${horasFormatadas} (Meta: ${meta}h) → Saldo: ${saldo >= 0 ? '+' : '-'}${saldoFormatado}<br>;
+
+      document.getElementById("resultados").innerHTML += linha;
+      atualizarSaldoTotal(saldo);
+      atualizarGrafico(dataFormatada, horasTrabalhadas);
+
+      db.collection("usuarios").doc(user.uid).collection("registros").doc(data).set({
+        data, entrada, saida, horasTrabalhadas, meta, saldo, dataFormatada
+      });
+    }
+
+    function carregarRegistros(uid) {
+      db.collection("usuarios").doc(uid).collection("registros").orderBy("data")
+        .get().then(snapshot => {
+          snapshot.forEach(doc => {
+            const r = doc.data();
+            const horasFormatadas = formatarHorasDecimais(r.horasTrabalhadas);
+            const saldoFormatado = formatarHorasDecimais(Math.abs(r.saldo));
+            const linha = ${r.dataFormatada}: Trabalhou ${horasFormatadas} (Meta: ${r.meta}h) → Saldo: ${r.saldo >= 0 ? '+' : '-'}${saldoFormatado}<br>;
+            document.getElementById("resultados").innerHTML += linha;
+            atualizarSaldoTotal(r.saldo);
+            atualizarGrafico(r.dataFormatada, r.horasTrabalhadas);
+          });
+        });
+    }
+
+    function atualizarSaldoTotal(saldoDia) {
+      totalSaldo += saldoDia;
+      const tipoSaldo = document.getElementById("tipoSaldo");
+      const saldoTotal = document.getElementById("saldoTotal");
+
+      saldoTotal.textContent = Saldo Total: ${formatarHorasDecimais(Math.abs(totalSaldo))};
+      tipoSaldo.textContent = totalSaldo > 0 ? "POSITIVO" : totalSaldo < 0 ? "NEGATIVO" : "";
+      tipoSaldo.style.color = totalSaldo > 0 ? "darkgreen" : totalSaldo < 0 ? "red" : "";
+    }
+
+    function resetarTudo() {
+      totalSaldo = 0;
+      document.getElementById("resultados").innerHTML = "";
+      document.getElementById("saldoTotal").textContent = "Saldo Total: 0h";
+      document.getElementById("tipoSaldo").textContent = "";
+      if (grafico) {
+        grafico.data.labels = [];
+        grafico.data.datasets[0].data = [];
+        grafico.update();
+      }
+    }
+
+    async function exportarPDF() {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF();
+      doc.setFontSize(18);
+      doc.text("Relatório de Controle de Horas", 105, 20, null, null, "center");
+      const texto = document.getElementById("resultados").innerHTML.replace(/<br>/g, '\n');
+      const linhas = texto.split('\n');
+      doc.setFontSize(12);
+      let y = 30;
+      linhas.forEach(linha => {
+        if (y > 270) { doc.addPage(); y = 20; }
+        doc.text(linha, 10, y); y += 8;
+      });
+      y += 10;
+      doc.setFontSize(14);
+      const saldoTexto = document.getElementById("saldoTotal").textContent;
+      const tipoSaldoTexto = document.getElementById("tipoSaldo").textContent;
+      doc.text(${saldoTexto} - ${tipoSaldoTexto}, 10, y);
+      const canvas = document.getElementById("graficoHoras");
+      const imgData = canvas.toDataURL("image/png");
+      y += 10;
+      if (y > 200) { doc.addPage(); y = 20; }
+      doc.addImage(imgData, "PNG", 15, y, 180, 90);
+      doc.save("controle_horas.pdf");
+    }
+
+    function formatarData(dataISO) {
+      const [ano, mes, dia] = dataISO.split("-");
+      return ${dia}/${mes}/${ano};
+    }
+
+    function formatarHorasDecimais(horasDecimais) {
+      const horas = Math.floor(Math.abs(horasDecimais));
+      const minutos = Math.round((Math.abs(horasDecimais) - horas) * 60);
+      return ${horas}h${minutos > 0 ? minutos + 'min' : ''};
+    }
+
+    function atualizarGrafico(data, horas) {
+      const ctx = document.getElementById("graficoHoras").getContext("2d");
+      if (!grafico) {
+        grafico = new Chart(ctx, {
+          type: 'bar',
+          data: { labels: [data], datasets: [{ label: 'Horas Trabalhadas', data: [horas], backgroundColor: '#3498db' }] },
+          options: { scales: { y: { beginAtZero: true } } }
+        });
+      } else {
+        grafico.data.labels.push(data);
+        grafico.data.datasets[0].data.push(horas);
+        grafico.update();
+      }
+    }
+  </script>
+  <script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('service-worker.js')
+      .then(reg => console.log("Service Worker registrado"))
+      .catch(err => console.error("Erro ao registrar o Service Worker", err));
+  }
+</script>
+</body>
+</html>
